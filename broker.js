@@ -21,7 +21,6 @@ class Consumer {
 
 class Message {
   name;
-  socket;
   consumers = [];
   event;
   assertedEvents = [];
@@ -39,10 +38,23 @@ class Message {
     this.assertedEvents.push(name);
   }
 
-  constructor(name, socket) {
+  hasConsumer(uid) {
+    return this.consumers.some((consumer) => consumer.socket.uid === uid);
+  }
+
+  removeConsumer(uid) {
+    this.consumers = this.consumers.filter(
+      (consumer) => consumer.socket.uid !== uid
+    );
+  }
+
+  isEmpty() {
+    return this.consumers.length === 0;
+  }
+
+  constructor(name) {
     this.event = new EventEmitter();
     this.name = name;
-    this.socket = socket;
 
     this.event.on('incoming', (data, socket) => {
       if (!this.assertedEvents.includes(data.name)) {
@@ -117,17 +129,30 @@ emitter.on('consume', (data, socket) => {
   );
 });
 
+// when there's a request from the consumer to create new channel
 emitter.on('new_channel', (data, socket) => {
-  const message = new Message(data.name, socket);
-  socket.write(
-    toJSONBuffer({
-      type: 'general',
-      message: `new channel with name ${data.name} is created`,
-    })
-  );
-  messages.push(message);
+  const msg = messages.find((msg) => msg.name === data.name);
+
+  if (msg) {
+    socket.write(
+      toJSONBuffer({
+        type: 'general',
+        message: `the channel with the name ${data.name} already exist`,
+      })
+    );
+  } else {
+    const message = new Message(data.name);
+    socket.write(
+      toJSONBuffer({
+        type: 'general',
+        message: `new channel with name ${data.name} is created`,
+      })
+    );
+    messages.push(message);
+  }
 });
 
+// when sender sends the data
 emitter.on('incoming', (data, socket) => {
   const message = messages.find((m) => m.name === data.channel);
   if (!message) {
@@ -173,9 +198,13 @@ server = net.createServer((socket) => {
     })
     .on('error', () => {
       messages.forEach((message) => {
-        if (message.socket.uid === socket.uid) {
-          messages = messages.filter((ms) => ms.socket.uid !== socket.uid);
-          return;
+        if (message.hasConsumer(socket.uid)) {
+          message.removeConsumer(socket.uid);
+
+          // if consumers list is empty remove the message
+          if (message.isEmpty()) {
+            messages = messages.filter((msg) => msg.name !== message.name);
+          }
         }
       });
       console.log('A connection has been closed');
